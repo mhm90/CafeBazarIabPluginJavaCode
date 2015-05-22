@@ -1,0 +1,21 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="ir.unity3d.cafebazarplugin"
+    android:versionCode="1"
+    android:versionName="1.0" >
+
+    <application
+        android:allowBackup="true"
+        android:icon="@drawable/ic_launcher"
+        android:label="@string/app_name"
+        android:theme="@style/AppTheme" >
+        <activity
+            android:name="ir.unity3d.cafebazarplugin.StoreController"
+            android:theme="@android:style/Theme.NoDisplay"
+            android:launchMode="singleInstance"
+            android:label="cafeBazaarPlugin"
+            android:screenOrientation="portrait"
+            >
+        </activity>
+    </application>
+
+</manifest>
