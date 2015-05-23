@@ -15,80 +15,80 @@ import android.content.Intent;
 import android.os.Bundle;
 import android.util.Log;
 
-public class StoreController extends Activity {
+public class StoreController{
 
+    public static String TAG = "CafeBazarPlugin";
+    public static boolean sendRequest = false;
 	// (arbitrary) request code for the purchase flow
 	static final int RC_REQUEST = 10001;
+    private static StoreController _instance;
+
 
 	private IabHelper mHelper;
-	private String TAG = "CafeBazarPlugin";
 	private String UnityStoreHandler = "StoreHandler";
-
 	private String base64EncodedPublicKey;
 	private String payload = "";
 	private Activity CurrentActivty;
 	private Inventory _inventory;
 
+    public IabHelper getHelper() {
+        return mHelper;
+    }
+
+    public IabHelper.OnIabPurchaseFinishedListener getPurchaseFinishedListener() {
+        return mPurchaseFinishedListener;
+    }
+
+    public static StoreController instance() {
+        if (_instance == null) {
+            _instance = new StoreController();
+        }
+        return _instance;
+    }
+
     public StoreController()
     {
+        _instance = this;
     }
 
-    @Override
-    public void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        Intent intent = getIntent();
-        base64EncodedPublicKey = intent.getStringExtra("PUBLIC_KEY");
-        payload = intent.getStringExtra("PAYLOAD");
-        CurrentActivty = this; //(Activity) activty;
-
-        startSetup(intent.getStringExtra("DEBUG_MODE"));
-    }
-
-    // We're being destroyed. It's important to dispose of the helper here!
-    @Override
-    public void onDestroy() {
-        super.onDestroy();
-
-        // very important:
-        Log.d(TAG, "Destroying helper.");
-        if (mHelper != null) {
-            mHelper.dispose();
-            mHelper = null;
-        }
-    }
-
-	public void startSetup(String _enableDebug) {		
+	public void startSetup(String publicKey, String _payload, Object activty , String _enableDebug) {
+        base64EncodedPublicKey = publicKey;
+        payload = _payload;
+        CurrentActivty = (Activity) activty;
 		Log.d(TAG, "Create Iab Helper.");
 		mHelper = new IabHelper(CurrentActivty, base64EncodedPublicKey);
 		if (_enableDebug.equals("TRUE")) {
 			mHelper.enableDebugLogging(true , TAG);
 		}
 		Log.d(TAG, "Setup Started.");
-		mHelper.startSetup(new IabHelper.OnIabSetupFinishedListener() {
-			public void onIabSetupFinished(IabResult result) {
-				Log.d(TAG, "Setup finished.");
+        UnityPlayer.currentActivity.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                mHelper.startSetup(new IabHelper.OnIabSetupFinishedListener() {
+                    public void onIabSetupFinished(IabResult result) {
+                        Log.d(TAG, "Setup finished.");
 
-				if (!result.isSuccess()) {
-					// Oh noes, there was a problem.
-					complain("Problem setting up in-app billing: " + result);
-					return;
-				}
+                        if (!result.isSuccess()) {
+                            // Oh noes, there was a problem.
+                            complain("Problem setting up in-app billing: " + result);
+                            return;
+                        }
 
-				// Have we been disposed of in the meantime? If so, quit.
-				if (mHelper == null)
-					return;
+                        // Have we been disposed of in the meantime? If so, quit.
+                        if (mHelper == null)
+                            return;
 
-				// IAB is fully set up. Now, let's get an inventory of stuff we
-				// own.
-				Log.d(TAG, "Setup successful. Querying inventory.");
-				UnityPlayer.currentActivity.runOnUiThread(new Runnable() {
-		            @Override
-		            public void run() {
-				mHelper.queryInventoryAsync(mGotInventoryListener);
-		            }
-				});
-			}
-		});
+                        // IAB is fully set up. Now, let's get an inventory of stuff we
+                        // own.
+                        Log.d(TAG, "Setup successful. Querying inventory.");
+
+                        mHelper.queryInventoryAsync(mGotInventoryListener);
+
+
+                    }
+                });
+            }
+        });
 	}
 
 	public void stopService() {
@@ -114,8 +114,6 @@ public class StoreController extends Activity {
 				return;
 			}
 
-            moveTaskToBack(true);
-
 			Log.d(TAG, "Query inventory was successful.");
 
 			_inventory = inventory;
@@ -138,18 +136,19 @@ public class StoreController extends Activity {
 	};
 
 	public void Consume(final String sku) {
-		UnityPlayer.currentActivity.runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
+
 		try {
-			Purchase purchase = _inventory.getPurchase(sku);
-			Log.d(TAG, "Consume Called for sku : " + purchase.getSku() + " , and token : " + purchase.getToken());
-			mHelper.consumeAsync(purchase, mConsumeFinishedListener);
+            UnityPlayer.currentActivity.runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    Purchase purchase = _inventory.getPurchase(sku);
+                    Log.d(TAG, "Consume Called for sku : " + purchase.getSku() + " , and token : " + purchase.getToken());
+                    mHelper.consumeAsync(purchase, mConsumeFinishedListener);
+                }
+            });
 		} catch (Exception e) {
 			complain("Failed to consume purchase with sku : " + sku);
 		}
-            }
-		});
 	}
 
 	// Called when consumption is complete
@@ -183,29 +182,40 @@ public class StoreController extends Activity {
 	};
 
 	public void launchPurchaseFlow(final String SKU) {
-		try {
-			Log.d(TAG, "Purchase Called for : " + SKU);
-			mHelper.launchPurchaseFlow(this, SKU, RC_REQUEST,
-					mPurchaseFinishedListener, payload);
-		} catch (Exception e) {
-			complain("Error while purchasing : " + e.toString());
-		}
+
+		Log.d(TAG, "Purchase Called for : " + SKU);
+        startProxyPurchaseActivity(SKU, true, payload);
+
 	}
 
 	public void launchSubscriptionPurchaseFlow(final String SKU) {
-		try {
-			Log.d(TAG, "Subscription Purchase Called for : " + SKU);
-			mHelper.launchSubscriptionPurchaseFlow(this, SKU,
-					RC_REQUEST, mPurchaseFinishedListener, payload);
-		} catch (Exception e) {
-			complain("Error while purchasing : " + e.toString());
-		}
+
+        Log.d(TAG, "Subscription Purchase Called for : " + SKU);
+        startProxyPurchaseActivity(SKU, false, payload);
 	}
+
+
+    private void startProxyPurchaseActivity(String sku, boolean inapp, String developerPayload) {
+
+        if (mHelper == null) {
+            Log.e(StoreController.TAG, "IABHelper UnityPlugin not initialized!");
+            return;
+        }
+
+        sendRequest = true;
+        Intent i = new Intent(UnityPlayer.currentActivity, GateWay.class);
+        i.putExtra("sku", sku);
+        i.putExtra("inapp", inapp);
+        i.putExtra("developerPayload", developerPayload);
+
+        // Launch proxy purchase Activity - it will close itself down when we have a response
+        UnityPlayer.currentActivity.startActivity(i);
+    }
 
 	// Callback for when a purchase is finished
 	IabHelper.OnIabPurchaseFinishedListener mPurchaseFinishedListener = new IabHelper.OnIabPurchaseFinishedListener() {
 		public void onIabPurchaseFinished(IabResult result, Purchase purchase) {
-			
+            UnityPlayer.currentActivity.sendBroadcast(new Intent(GateWay.ACTION_FINISH));
 			Log.d(TAG, "Purchase finished: " + result + ", purchase: "
 					+ purchase);
 
@@ -221,13 +231,9 @@ public class StoreController extends Activity {
 				complain("Error purchasing. Authenticity verification failed.");
 				return;
 			}
-			UnityPlayer.currentActivity.runOnUiThread(new Runnable() {
-	            @Override
-	            public void run() {
+
 			mHelper.queryInventoryAsync(mGotInventoryListener);
-			
-	            }
-			});
+
 			
 			Log.d(TAG, "Purchase successful.");
 
@@ -240,23 +246,6 @@ public class StoreController extends Activity {
 		Log.e(TAG, "**** TrivialDrive Error: " + message);
 		alert("Error : " + message);
 	}
-
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        Log.d(TAG, "onActivityResult(" + requestCode + "," + resultCode + "," + data);
-        if (mHelper == null) return;
-
-        // Pass on the activity result to the helper for handling
-        if (!mHelper.handleActivityResult(requestCode, resultCode, data)) {
-            // not handled, so handle it ourselves (here's where you'd
-            // perform any handling of activity results not related to in-app
-            // billing...
-            super.onActivityResult(requestCode, resultCode, data);
-        }
-        else {
-            Log.d(TAG, "onActivityResult handled by IABUtil.");
-        }
-    }
 
 	void alert(String errorMessage) {
 		UnityPlayer
