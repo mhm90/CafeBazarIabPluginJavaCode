@@ -1,5 +1,6 @@
 package ir.unity3d.cafebazarplugin;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import com.unity3d.player.UnityPlayer;
@@ -8,12 +9,15 @@ import util.IabHelper;
 import util.IabResult;
 import util.Inventory;
 import util.Purchase;
+import util.JsonUtil;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ClipData.Item;
 import android.content.Intent;
 import android.os.Bundle;
 import android.util.Log;
+
+import org.json.JSONException;
 
 public class StoreController{
 
@@ -136,14 +140,14 @@ public class StoreController{
 			}
 
 			Log.d(TAG, "Query inventory was successful.");
-            String temp = "";
 			_inventory = inventory;
 			List<Purchase> Purchases = inventory.getAllPurchases();
+            List<Purchase> purchaseList = new ArrayList<Purchase>();
 			for (Purchase purchase : Purchases) {
 				if (purchase != null) {
                     Log.d(TAG , "purchase :" + purchase.getSku() + "," + purchase.getDeveloperPayload() + "," + purchase.getItemType());
                     if (verifyDeveloperPayload(purchase)) {
-                        temp += purchase.getSku() + ",";
+                        purchaseList.add(purchase);
                         Log.d(TAG,
                                 "purchase.getItemType() : "
                                         + purchase.getItemType()
@@ -152,9 +156,13 @@ public class StoreController{
                     }
 				}
 			}
-            UnityPlayer.UnitySendMessage(UnityStoreHandler,
-                    "GetPurchasesFinished", temp);
-			Log.d(TAG, "Initial inventory query finished; enabling main UI.");
+            try {
+                UnityPlayer.UnitySendMessage(UnityStoreHandler,
+                        "GetPurchasesFinished", JsonUtil.ToJson(purchaseList));
+            } catch (JSONException e) {
+                complain("Failed to query inventory" , -1008 );
+            }
+            Log.d(TAG, "Initial inventory query finished; enabling main UI.");
 		}
 	};
 
