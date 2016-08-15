@@ -1,3 +1,5 @@
+[![Build Status](https://travis-ci.org/IranUnityGameDevelopers/CafeBazarIabPluginJavaCode.svg?branch=master)](https://travis-ci.org/IranUnityGameDevelopers/CafeBazarIabPluginJavaCode)
+
 # CafeBazarIabPluginJavaCode
 
 Android Studio Project
