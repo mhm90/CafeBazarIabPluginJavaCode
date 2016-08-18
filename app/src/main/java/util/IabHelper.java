@@ -22,6 +22,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentSender.SendIntentException;
 import android.content.ServiceConnection;
+import android.content.pm.ResolveInfo;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
@@ -265,7 +266,8 @@ public class IabHelper {
 
         Intent serviceIntent = new Intent("ir.cafebazaar.pardakht.InAppBillingService.BIND");
         serviceIntent.setPackage("com.farsitel.bazaar");
-        if (!mContext.getPackageManager().queryIntentServices(serviceIntent, 0).isEmpty()) {
+        List<ResolveInfo> l = mContext.getPackageManager().queryIntentServices(serviceIntent, 0);
+        if (l != null && !l.isEmpty()) {
             // service available to handle that Intent
             mContext.bindService(serviceIntent, mServiceConn, Context.BIND_AUTO_CREATE);
         }
@@ -384,6 +386,13 @@ public class IabHelper {
 
         try {
             logDebug("Constructing buy intent for " + sku + ", item type: " + itemType);
+            if (mService == null) {
+                logWarn("Error in accessing InAppBillingService, The service is disconnected or is not bind at all");
+                flagEndAsync();
+                result = new IabResult(BILLING_RESPONSE_RESULT_DEVELOPER_ERROR, "Failed to buy item, Can not buy item because BillingService is not connected");
+                if (listener != null) listener.onIabPurchaseFinished(result, null);
+                return;
+            }
             Bundle buyIntentBundle = mService.getBuyIntent(3, mContext.getPackageName(), sku, itemType, extraData);
             int response = getResponseCodeFromBundle(buyIntentBundle);
             if (response != BILLING_RESPONSE_RESULT_OK) {
