@@ -59,7 +59,10 @@ import java.util.List;
  * to ensure proper cleanup. This object holds a binding to the in-app billing
  * service, which will leak unless you dispose of it correctly. If you created
  * the object on an Activity's onCreate method, then the recommended
- * place to dispose of it is the Activity's onDestroy method.
+ * place to dispose of it is the Activity's onDestroy method. It is invalid to
+ * dispose the object while an asynchronous operation is in progress. You can
+ * call {@link #disposeWhenFinished()} to ensure that any in-progress operation
+ * completes before the object is disposed.
  *
  * A note about threading: When using this object from a background thread, you may
  * call the blocking versions of methods; when using from a UI thread, call
@@ -82,12 +85,21 @@ public class IabHelper {
     // Has this object been disposed of? (If so, we should ignore callbacks, etc)
     boolean mDisposed = false;
 
+    // Do we need to dispose this object after an in-progress asynchronous operation?
+    boolean mDisposeAfterAsync = false;
+
     // Are subscriptions supported?
     boolean mSubscriptionsSupported = false;
+
+    // Is subscription update supported?
+    boolean mSubscriptionUpdateSupported = false;
 
     // Is an asynchronous operation in progress?
     // (only one at a time can be in progress)
     boolean mAsyncInProgress = false;
+
+    // Ensure atomic access to mAsyncInProgress and mDisposeAfterAsync.
+    private final Object mAsyncInProgressLock = new Object();
 
     // (for logging/debugging)
     // if mAsyncInProgress == true, what asynchronous operation is in progress?
@@ -112,6 +124,7 @@ public class IabHelper {
     // Billing response codes
     public static final int BILLING_RESPONSE_RESULT_OK = 0;
     public static final int BILLING_RESPONSE_RESULT_USER_CANCELED = 1;
+    public static final int BILLING_RESPONSE_RESULT_SERVICE_UNAVAILABLE = 2;
     public static final int BILLING_RESPONSE_RESULT_BILLING_UNAVAILABLE = 3;
     public static final int BILLING_RESPONSE_RESULT_ITEM_UNAVAILABLE = 4;
     public static final int BILLING_RESPONSE_RESULT_DEVELOPER_ERROR = 5;
@@ -131,6 +144,7 @@ public class IabHelper {
     public static final int IABHELPER_UNKNOWN_ERROR = -1008;
     public static final int IABHELPER_SUBSCRIPTIONS_NOT_AVAILABLE = -1009;
     public static final int IABHELPER_INVALID_CONSUMPTION = -1010;
+    public static final int IABHELPER_SUBSCRIPTION_UPDATE_NOT_AVAILABLE = -1011;
 
     // Keys for the responses from InAppBillingService
     public static final String RESPONSE_CODE = "RESPONSE_CODE";
@@ -233,9 +247,11 @@ public class IabHelper {
 
                         // if in-app purchases aren't supported, neither are subscriptions.
                         mSubscriptionsSupported = false;
+                        mSubscriptionUpdateSupported = false;
                         return;
+                    } else {
+                        logDebug("In-app billing version 3 supported for " + packageName);
                     }
-                    logDebug("In-app billing version 3 supported for " + packageName);
 
                     // check for v3 subscriptions support
                     response = mService.isBillingSupported(3, packageName, ITEM_TYPE_SUBS);
@@ -292,7 +308,7 @@ public class IabHelper {
         mSetupDone = false;
         if (mServiceConn != null) {
             logDebug("Unbinding from service.");
-            if (mContext != null) mContext.unbindService(mServiceConn);
+            if (mContext != null && null != mServiceConn) mContext.unbindService(mServiceConn);
         }
         mDisposed = true;
         mContext = null;
@@ -618,20 +634,21 @@ public class IabHelper {
         final Handler handler = new Handler();
         checkNotDisposed();
         checkSetupDone("queryInventory");
-        flagStartAsync("refresh inventory");
+
         (new Thread(new Runnable() {
             public void run() {
                 IabResult result = new IabResult(BILLING_RESPONSE_RESULT_OK, "Inventory refresh successful.");
                 Inventory inv = null;
-                try {
-                    inv = queryInventory(querySkuDetails, moreSkus);
-                }
-                catch (IabException ex) {
-                    result = ex.getResult();
-                }
+                synchronized (mAsyncOperation) {
+                    flagStartAsync("refresh inventory");
+                    try {
+                        inv = queryInventory(querySkuDetails, moreSkus);
+                    } catch (IabException ex) {
+                        result = ex.getResult();
+                    }
 
-                flagEndAsync();
-
+                    flagEndAsync();
+                }
                 final IabResult result_f = result;
                 final Inventory inv_f = inv;
                 if (!mDisposed && listener != null) {
@@ -740,11 +757,12 @@ public class IabHelper {
     }
 
     /**
-     * Same as {@link consumeAsync}, but for multiple items at once.
+     * Same as {@link #consumeAsync}, but for multiple items at once.
      * @param purchases The list of PurchaseInfo objects representing the purchases to consume.
      * @param listener The listener to notify when the consumption operation finishes.
      */
-    public void consumeAsync(List<Purchase> purchases, OnConsumeMultiFinishedListener listener) {
+    public void consumeAsync(List<Purchase> purchases, OnConsumeMultiFinishedListener listener)
+        throws IabAsyncInProgressException {
         checkNotDisposed();
         checkSetupDone("consume");
         consumeAsyncInternal(purchases, null, listener);
@@ -839,6 +857,15 @@ public class IabHelper {
         mAsyncInProgress = false;
     }
 
+    /**
+     * Exception thrown when the requested operation cannot be started because an async operation
+     * is still in progress.
+     */
+    public static class IabAsyncInProgressException extends Exception {
+        public IabAsyncInProgressException(String message) {
+            super(message);
+        }
+    }
 
     int queryPurchases(Inventory inv, String itemType) throws JSONException, RemoteException {
         // Query purchases
@@ -954,21 +981,24 @@ public class IabHelper {
                               final OnConsumeFinishedListener singleListener,
                               final OnConsumeMultiFinishedListener multiListener) {
         final Handler handler = new Handler();
-        flagStartAsync("consume");
+
         (new Thread(new Runnable() {
             public void run() {
                 final List<IabResult> results = new ArrayList<IabResult>();
-                for (Purchase purchase : purchases) {
-                    try {
-                        consume(purchase);
-                        results.add(new IabResult(BILLING_RESPONSE_RESULT_OK, "Successful consume of sku " + purchase.getSku()));
-                    }
-                    catch (IabException ex) {
-                        results.add(ex.getResult());
-                    }
-                }
 
-                flagEndAsync();
+                synchronized (mAsyncOperation) {
+                    flagStartAsync("consume");
+                    for (Purchase purchase : purchases) {
+                        try {
+                            consume(purchase);
+                            results.add(new IabResult(BILLING_RESPONSE_RESULT_OK, "Successful consume of sku " + purchase.getSku()));
+                        } catch (IabException ex) {
+                            results.add(ex.getResult());
+                        }
+                    }
+
+                    flagEndAsync();
+                }
                 if (!mDisposed && singleListener != null) {
                     handler.post(new Runnable() {
                         public void run() {
