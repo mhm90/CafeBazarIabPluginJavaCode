@@ -54,6 +54,9 @@ public class GateWay extends Activity{
                 }
             } catch (java.lang.IllegalStateException e) {
                 StoreController.instance().getPurchaseFinishedListener().onIabPurchaseFinished(new IabResult(IabHelper.BILLING_RESPONSE_RESULT_BILLING_UNAVAILABLE, "Cannot start purchase process. Billing unavailable."), null);
+            } catch (IabHelper.IabAsyncInProgressException e) {
+                StoreController.instance().getPurchaseFinishedListener().onIabPurchaseFinished(new IabResult(IabHelper.BILLING_RESPONSE_RESULT_BILLING_UNAVAILABLE, "Cannot start purchase process. Some operation is already in progress: " + e.toString()), null);
+                e.printStackTrace();
             }
         }
     }
