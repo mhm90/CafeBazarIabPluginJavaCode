@@ -1,5 +1,7 @@
 package ir.unity3d.cafebazarplugin;
 
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -21,7 +23,7 @@ import org.json.JSONException;
 
 public class StoreController{
 
-    public static String TAG = "CafeBazarPlugin";
+    public static String TAG = "CafeBazaarPlugin";
     public static boolean sendRequest = false;
 	// (arbitrary) request code for the purchase flow
 	static final int RC_REQUEST = 10001;
@@ -56,7 +58,7 @@ public class StoreController{
         _instance = this;
     }
 
-	public void startSetup(String publicKey, String _payload, Object activty , String _enableDebug) {
+	public void startSetup(String publicKey, String _payload, Object activty , final String _enableDebug) {
         base64EncodedPublicKey = publicKey;
         payload = _payload;
         CurrentActivty = (Activity) activty;
@@ -69,27 +71,31 @@ public class StoreController{
         UnityPlayer.currentActivity.runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                mHelper.startSetup(new IabHelper.OnIabSetupFinishedListener() {
-                    public void onIabSetupFinished(IabResult result) {
-                        Log.d(TAG, "Setup finished.");
+                try {
+                    mHelper.startSetup(new IabHelper.OnIabSetupFinishedListener() {
+                        public void onIabSetupFinished(IabResult result) {
+                            Log.d(TAG, "Setup finished.");
 
-                        if (!result.isSuccess()) {
-                            // Oh noes, there was a problem.
-                            complain("Problem setting up in-app billing: " + result , result.getResponse());
-                            return;
+                            if (!result.isSuccess()) {
+                                // Oh noes, there was a problem.
+                                complain("Problem setting up in-app billing: " + result, result.getResponse());
+                                return;
+                            }
+
+                            // Have we been disposed of in the meantime? If so, quit.
+                            if (mHelper == null)
+                                return;
+
+                            // IAB is fully set up. Now, let's get an inventory of stuff we
+                            // own.
+                            Log.d(TAG, "Setup successful.");
+                            UnityPlayer.UnitySendMessage(UnityStoreHandler,
+                                    "SetupSuccessful", "");
                         }
-
-                        // Have we been disposed of in the meantime? If so, quit.
-                        if (mHelper == null)
-                            return;
-
-                        // IAB is fully set up. Now, let's get an inventory of stuff we
-                        // own.
-                        Log.d(TAG, "Setup successful.");
-                        UnityPlayer.UnitySendMessage(UnityStoreHandler,
-                                "SetupSuccessful", "");
-                    }
-                });
+                    });
+                } catch (SecurityException e) {
+                    complain("Problem setting up in-app billing: " + getFullStackTrace(e), IabHelper.IABHELPER_SEND_INTENT_FAILED);
+                }
             }
         });
 	}
@@ -100,7 +106,11 @@ public class StoreController{
             @Override
             public void run() {
                 Log.d(TAG, "Querying inventory.");
-                mHelper.queryInventoryAsync(mGotInventoryListener);
+                try {
+                    mHelper.queryInventoryAsync(mGotInventoryListener);
+                } catch (IabHelper.IabAsyncInProgressException e) {
+                    complain("Problem querying Inventory async: " + getFullStackTrace(e), IabHelper.IABHELPER_UNKNOWN_ERROR);
+                }
             }
         });
     }
@@ -110,7 +120,11 @@ public class StoreController{
             @Override
             public void run() {
                 Log.d(TAG, "Querying inventory.");
-                mHelper.queryInventoryAsync(listener);
+                try {
+                    mHelper.queryInventoryAsync(listener);
+                } catch (IabHelper.IabAsyncInProgressException e) {
+                    complain("Problem UpdateInventory async: " + getFullStackTrace(e), IabHelper.IABHELPER_UNKNOWN_ERROR);
+                }
             }
         });
     }
@@ -118,7 +132,7 @@ public class StoreController{
 
 	public void stopService() {
 		if (mHelper != null)
-			mHelper.dispose();
+			mHelper.disposeWhenFinished();
 		mHelper = null;
 	}
 
@@ -135,7 +149,7 @@ public class StoreController{
 
 			// Is it a failure?
 			if (result.isFailure()) {
-				complain("Failed to query inventory: " + result ,result.getResponse());
+				complain("Failed to query inventory: " + result, result.getResponse());
 				return;
 			}
 
@@ -159,8 +173,8 @@ public class StoreController{
             try {
                 UnityPlayer.UnitySendMessage(UnityStoreHandler,
                         "GetPurchasesFinished", JsonUtil.ToJson(purchaseList));
-            } catch (JSONException e) {
-                complain("Failed to query inventory" , -1008 );
+            } catch (Exception e) {
+                complain("Failed to query inventory" , IabHelper.IABHELPER_UNKNOWN_ERROR);
             }
             Log.d(TAG, "Initial inventory query finished; enabling main UI.");
 		}
@@ -178,7 +192,11 @@ public class StoreController{
             public void run() {
                 Purchase purchase = _inventory.getPurchase(consumeSKU);
                 Log.d(TAG, "Consume Called for sku : " + purchase.getSku() + " , and token : " + purchase.getToken());
-                mHelper.consumeAsync(purchase, mConsumeFinishedListener);
+                try {
+                    mHelper.consumeAsync(purchase, mConsumeFinishedListener);
+                } catch (IabHelper.IabAsyncInProgressException e) {
+                    complain("Problem Consume async: " + getFullStackTrace(e), IabHelper.IABHELPER_UNKNOWN_ERROR);
+                }
             }
         });
     }
@@ -203,7 +221,6 @@ public class StoreController{
             }
 
             Log.d(TAG, "Query inventory was successful.");
-            String temp = "";
             _inventory = inventory;
             consumeInternal();
 
@@ -242,15 +259,22 @@ public class StoreController{
 	};
 
 	public void launchPurchaseFlow(final String SKU) {
-
-		Log.d(TAG, "Purchase Called for : " + SKU);
-        startProxyPurchaseActivity(SKU, true, payload);
-
+        launchPurchaseFlow(SKU, payload);
 	}
 
-	public void launchSubscriptionPurchaseFlow(final String SKU) {
+    public void launchPurchaseFlow(final String SKU, String payload) {
+        Log.d(TAG, "Purchase Called for : " + SKU);
+        this.payload = payload;
+        startProxyPurchaseActivity(SKU, true, payload);
+    }
 
+    public void launchSubscriptionPurchaseFlow(final String SKU) {
+        launchSubscriptionPurchaseFlow(SKU, payload);
+    }
+
+	public void launchSubscriptionPurchaseFlow(final String SKU, String payload) {
         Log.d(TAG, "Subscription Purchase Called for : " + SKU);
+        this.payload = payload;
         startProxyPurchaseActivity(SKU, false, payload);
 	}
 
@@ -310,14 +334,18 @@ public class StoreController{
 	};
 
 	void complain(String message , int errorCode) {
-		Log.e(TAG, "**** TrivialDrive Error: " + message);
+		Log.e(TAG, "**** IAB Error: " + message);
 		alert("Error : " + message , errorCode);
 	}
 
 	void alert(String errorMessage , int errorCode) {
         errorMessage += "@" + errorCode;
-		UnityPlayer
-				.UnitySendMessage(UnityStoreHandler, "OnError", errorMessage);
+        try {
+            UnityPlayer
+                    .UnitySendMessage(UnityStoreHandler, "OnError", errorMessage);
+        } catch (Exception ex) {
+            Log.e(TAG, "Can not send error code: " + errorCode + " to unity", ex);
+        }
 	}
 
 	/** Verifies the developer payload of a purchase. */
@@ -353,5 +381,11 @@ public class StoreController{
 
 		return false;
 	}
+
+    static String getFullStackTrace(Exception ex) {
+        StringWriter errors = new StringWriter();
+        ex.printStackTrace(new PrintWriter(errors));
+        return errors.toString();
+    }
 
 }
